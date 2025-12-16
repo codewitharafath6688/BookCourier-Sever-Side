@@ -58,7 +58,11 @@ async function run() {
 
     // user related api
 
-    app.get("/users", (req, res) => {});
+    app.get("/users", verifyFBToken,  async(req, res) => {
+      const cursor = userCollection.find();
+      const result = await cursor.toArray();
+      res.send(result);
+    });
 
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -97,7 +101,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/librarians/:id",verifyFBToken , async (req, res) => {
+    app.patch("/librarians/:id", verifyFBToken, async (req, res) => {
       const status = req.body.status;
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
