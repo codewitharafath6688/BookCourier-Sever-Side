@@ -56,6 +56,28 @@ async function run() {
     const userCollection = db.collection("users");
     const librarianCollection = db.collection("librarians");
 
+    // middlewear for admin route
+
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded_email;
+      const query = { email };
+      const user = await userCollection.findOne(query);
+      if (!user || user?.role !== "admin") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
+
+    const verifyLibrarian = async (req, res, next) => {
+      const email = req.decoded_email;
+      const query = { email };
+      const user = await userCollection.findOne(query);
+      if (!user || user?.role !== "librarian") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
+
     // user related api
 
     app.get("/users", verifyFBToken, async (req, res) => {
@@ -67,8 +89,8 @@ async function run() {
     app.get("/users/:email/role", async (req, res) => {
       const email = req.params.email;
       const query = { email };
-      const result = await userCollection.findOne(query);
-      res.send({ role: result?.role || "user" });
+      const user = await userCollection.findOne(query);
+      res.send({ role: user?.role || "user" });
     });
 
     app.post("/users", async (req, res) => {
@@ -83,7 +105,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/users/:id", verifyFBToken, async (req, res) => {
+    app.patch("/users/:id", verifyFBToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const updateRole = req.body.role;
@@ -98,7 +120,7 @@ async function run() {
 
     // librarian related api
 
-    app.get("/librarians", async (req, res) => {
+    app.get("/librarians", verifyFBToken, async (req, res) => {
       const query = {};
       if (req.query.status) {
         query.status = req.query.status;
@@ -108,7 +130,7 @@ async function run() {
       res.send(result);
     });
 
-    app.post("/librarians", async (req, res) => {
+    app.post("/librarians", verifyFBToken, async (req, res) => {
       const librarian = req.body;
       const email = librarian.email;
       const existLibrarianEmail = await librarianCollection.findOne({ email });
@@ -121,45 +143,55 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/librarians/:id", verifyFBToken, async (req, res) => {
-      const status = req.body.status;
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const updateDoc = {
-        $set: {
-          status: status,
-        },
-      };
-      const result = await librarianCollection.updateOne(query, updateDoc);
-      if (status === "approved") {
-        const email = req.decoded_email;
-        const userQuery = { email };
-        const updateUser = {
+    app.patch(
+      "/librarians/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const status = req.body.status;
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const updateDoc = {
           $set: {
-            role: "librarian",
+            status: status,
           },
         };
-        const userResult = await userCollection.updateOne(
-          userQuery,
-          updateUser
-        );
-        console.log(
-          "User role update:",
-          userResult.matchedCount,
-          "matched,",
-          userResult.modifiedCount,
-          "modified"
-        );
+        const result = await librarianCollection.updateOne(query, updateDoc);
+        if (status === "approved") {
+          const email = req.decoded_email;
+          const userQuery = { email };
+          const updateUser = {
+            $set: {
+              role: "librarian",
+            },
+          };
+          const userResult = await userCollection.updateOne(
+            userQuery,
+            updateUser
+          );
+          console.log(
+            "User role update:",
+            userResult.matchedCount,
+            "matched,",
+            userResult.modifiedCount,
+            "modified"
+          );
+        }
+        res.send(result);
       }
-      res.send(result);
-    });
+    );
 
-    app.delete("/librarians/:id", async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await librarianCollection.deleteOne(query);
-      res.send(result);
-    });
+    app.delete(
+      "/librarians/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await librarianCollection.deleteOne(query);
+        res.send(result);
+      }
+    );
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
