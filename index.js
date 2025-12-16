@@ -58,10 +58,17 @@ async function run() {
 
     // user related api
 
-    app.get("/users", verifyFBToken,  async(req, res) => {
+    app.get("/users", verifyFBToken, async (req, res) => {
       const cursor = userCollection.find();
       const result = await cursor.toArray();
       res.send(result);
+    });
+
+    app.get("/users/:email/role", async (req, res) => {
+      const email = req.params.email;
+      const query = { email };
+      const result = await userCollection.findOne(query);
+      res.send({ role: result?.role || "user" });
     });
 
     app.post("/users", async (req, res) => {
@@ -73,6 +80,19 @@ async function run() {
         return res.send({ message: "user already exist" });
       }
       const result = await userCollection.insertOne(user);
+      res.send(result);
+    });
+
+    app.patch("/users/:id", verifyFBToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const updateRole = req.body.role;
+      const updateDoc = {
+        $set: {
+          role: updateRole,
+        },
+      };
+      const result = await userCollection.updateOne(query, updateDoc);
       res.send(result);
     });
 
