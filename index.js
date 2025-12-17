@@ -55,6 +55,7 @@ async function run() {
     const db = client.db("bookCourier_db");
     const userCollection = db.collection("users");
     const librarianCollection = db.collection("librarians");
+    const addBookCollection = db.collection("books");
 
     // middlewear for admin route
 
@@ -151,6 +152,7 @@ async function run() {
         const status = req.body.status;
         const id = req.params.id;
         const query = { _id: new ObjectId(id) };
+        const librarian = await librarianCollection.findOne(query);
         const updateDoc = {
           $set: {
             status: status,
@@ -158,7 +160,7 @@ async function run() {
         };
         const result = await librarianCollection.updateOne(query, updateDoc);
         if (status === "approved") {
-          const email = req.decoded_email;
+          const email = librarian.email;
           const userQuery = { email };
           const updateUser = {
             $set: {
@@ -189,6 +191,42 @@ async function run() {
         const id = req.params.id;
         const query = { _id: new ObjectId(id) };
         const result = await librarianCollection.deleteOne(query);
+        res.send(result);
+      }
+    );
+
+    // addBook related api
+
+    app.get("/add-book", async (req, res) => {
+      const librarianEmail = req.query.email;
+      const query = { librarianEmail };
+      const cursor = addBookCollection.find(query);
+      const result = await cursor.toArray();
+      res.send(result);
+    });
+
+    app.post("/add-book", verifyFBToken, verifyLibrarian, async (req, res) => {
+      const addBook = req.body;
+      if (addBook.price) {
+        addBook.price = parseFloat(addBook.price);
+      }
+      addBook.createdAt = new Date();
+      const result = await addBookCollection.insertOne(addBook);
+      res.send(result);
+    });
+
+    app.patch(
+      "/add-book/:id",
+      verifyFBToken,
+      verifyLibrarian,
+      async (req, res) => {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const fullInfo = req.body;
+        const updateDoc = {
+          $set: fullInfo,
+        };
+        const result = await addBookCollection.updateOne(query, updateDoc);
         res.send(result);
       }
     );
