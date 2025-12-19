@@ -58,6 +58,7 @@ async function run() {
     const librarianCollection = db.collection("librarians");
     const addBookCollection = db.collection("books");
     const orderCollection = db.collection("orders");
+    const paymentCollection = db.collection("payment");
 
     // middlewear for admin route
 
@@ -311,6 +312,7 @@ async function run() {
         mode: "payment",
         metadata: {
           orderId: paymentInfo.orderId,
+          bookName: paymentInfo.bookName,
         },
         success_url: `${process.env.SITE_Domain}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${process.env.SITE_Domain}/dashboard/payment-cancelled`,
@@ -334,9 +336,23 @@ async function run() {
           },
         };
         const result = await orderCollection.updateOne(query, updateDoc);
-        return res.send(result);
+
+        const payment = {
+          amount: session.amount_total / 100,
+          currency: session.currency,
+          customerEmail: session.customer_email,
+          orderId: session.metadata.orderId,
+          bookName: session.metadata.bookName,
+          transactionId: session.payment_intent,
+          paymentStatus: session.payment_status,
+          paidAt : new Date(),
+        };
+
+        const paymentResult = await paymentCollection.insertOne(payment);
+
+        return res.send({modifiedResult: result, paymentInfo: paymentResult});
       }
-      res.send({ success: true });
+      res.send({ success: false});
     });
 
     // admin related api (control api)
