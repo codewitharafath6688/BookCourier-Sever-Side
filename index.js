@@ -3,6 +3,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 const cors = require("cors");
 require("dotenv").config();
+const stripe = require("stripe")(process.env.STRIPE_Key);
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const admin = require("firebase-admin");
 
@@ -56,6 +57,7 @@ async function run() {
     const userCollection = db.collection("users");
     const librarianCollection = db.collection("librarians");
     const addBookCollection = db.collection("books");
+    const orderCollection = db.collection("orders");
 
     // middlewear for admin route
 
@@ -225,6 +227,142 @@ async function run() {
         const fullInfo = req.body;
         const updateDoc = {
           $set: fullInfo,
+        };
+        const result = await addBookCollection.updateOne(query, updateDoc);
+        res.send(result);
+      }
+    );
+
+    // books show (for users)
+
+    app.get("/books", verifyFBToken, async (req, res) => {
+      const bookStatus = "published";
+      const bookQuery = { bookStatus };
+      const books = addBookCollection.find(bookQuery);
+      const result = await books.toArray();
+      res.send(result);
+    });
+
+    app.get("/books/:id", verifyFBToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const books = await addBookCollection.findOne(query);
+      res.send(books);
+    });
+
+    // orders related api
+
+    app.get("/orders", verifyFBToken, async (req, res) => {
+      const userEmail = req.decoded_email;
+      const myOrders = await orderCollection.find({ userEmail }).toArray();
+      res.send(myOrders);
+    });
+
+    app.post("/orders/:bookId", verifyFBToken, async (req, res) => {
+      const { address } = req.body;
+      const bookId = req.params.bookId;
+      const userEmail = req.decoded_email;
+      const query = { _id: new ObjectId(bookId) };
+      const book = await addBookCollection.findOne(query);
+      if (book.bookStatus === "published") {
+        const order = {
+          bookId,
+          userEmail,
+          address,
+          bookName: book?.bookName,
+          price: book?.price,
+          createdAt: new Date(),
+          orderStatus: "pending",
+        };
+        const orderResult = await orderCollection.insertOne(order);
+        return res.send(orderResult);
+      }
+      res.send({ message: "not available" });
+    });
+
+    // payment related api
+
+    app.get("/payment/:id", verifyFBToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await orderCollection.findOne(query);
+      res.send(result);
+    });
+
+    app.post("/create-checkout-session", verifyFBToken, async (req, res) => {
+      const paymentInfo = req.body;
+      const amount = parseInt(paymentInfo.price) * 100;
+      const session = await stripe.checkout.sessions.create({
+        line_items: [
+          {
+            // Provide the exact Price ID (for example, price_1234) of the product you want to sell
+            price_data: {
+              currency: "USD",
+              unit_amount: amount,
+              product_data: {
+                name: paymentInfo.bookName,
+                images: [paymentInfo.bookImageUrl],
+              },
+            },
+            quantity: 1,
+          },
+        ],
+        customer_email: req.decoded_email,
+        mode: "payment",
+        metadata: {
+          orderId: paymentInfo.orderId,
+        },
+        success_url: `${process.env.SITE_Domain}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${process.env.SITE_Domain}/dashboard/payment-cancelled`,
+      });
+
+      console.log(session);
+      res.send({ url: session.url });
+    });
+
+    app.patch("/payment-success", verifyFBToken, async (req, res) => {
+      const sessionId = req.query.session_id;
+      // console.log(sessionId);
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
+      console.log("session retrieve", session);
+      if (session.payment_status === "paid") {
+        const id = session.metadata.orderId;
+        const query = { _id: new ObjectId(id) };
+        const updateDoc = {
+          $set: {
+            paymentStatus: "paid",
+          },
+        };
+        const result = await orderCollection.updateOne(query, updateDoc);
+        return res.send(result);
+      }
+      res.send({ success: true });
+    });
+
+    // admin related api (control api)
+
+    app.get(
+      "/librarian-books",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const books = await addBookCollection.find().toArray();
+        res.send(books);
+      }
+    );
+
+    app.patch(
+      "/librarian-books/:id/status",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const { bookStatus } = req.body;
+        const updateDoc = {
+          $set: {
+            bookStatus: bookStatus,
+          },
         };
         const result = await addBookCollection.updateOne(query, updateDoc);
         res.send(result);
