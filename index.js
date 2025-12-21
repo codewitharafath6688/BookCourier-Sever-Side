@@ -13,6 +13,12 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 
+function generateTrackingId() {
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+  const rand = Math.floor(1000 + Math.random() * 9000);
+  return `TRK-${date}-${rand}`;
+}
+
 // middlewear
 app.use(express.json());
 app.use(cors());
@@ -132,6 +138,16 @@ async function run() {
       const cursor = librarianCollection.find(query);
       const result = await cursor.toArray();
       res.send(result);
+    });
+
+    app.get("/librarins/orders", verifyFBToken, async (req, res) => {
+      const librarianEmail = req.query.email;
+      const query = {
+        librarianEmail,
+        paymentStatus: "paid",
+      };
+      const orders = await orderCollection.find(query).toArray();
+      res.send(orders);
     });
 
     app.post("/librarians", verifyFBToken, async (req, res) => {
@@ -271,14 +287,39 @@ async function run() {
           userEmail,
           address,
           bookName: book?.bookName,
+          librarianEmail: book?.librarianEmail,
           price: book?.price,
           createdAt: new Date(),
-          orderStatus: "pending",
         };
         const orderResult = await orderCollection.insertOne(order);
         return res.send(orderResult);
       }
       res.send({ message: "not available" });
+    });
+
+    app.patch("/orders/:id/status", verifyFBToken, async (req, res) => {
+      const id = req.params.id;
+      const deliveryStatus = req.body.deliveryStatus;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          deliveryStatus: deliveryStatus,
+        },
+      };
+      const orders = await orderCollection.updateOne(query, updateDoc);
+      res.send(orders);
+    });
+
+    // payment history
+
+    app.get("/payment-history", verifyFBToken, async (req, res) => {
+      const email = req.query.email;
+      const query = {};
+      if (email) {
+        query.customerEmail = email;
+      }
+      const result = await paymentCollection.find(query).toArray();
+      res.send(result);
     });
 
     // payment related api
@@ -327,17 +368,34 @@ async function run() {
       // console.log(sessionId);
       const session = await stripe.checkout.sessions.retrieve(sessionId);
       console.log("session retrieve", session);
+      // const transactionId = session.payment_intent;
+      // const query = { transactionId: transactionId };
+
+      const paymentExist = await paymentCollection.findOne({
+        sessionId: session.id,
+      });
+      if (paymentExist) {
+        return res.send({
+          message: "already exist",
+          transactionId,
+          trackingId: paymentExist.trackingId,
+        });
+      }
+      const trackingId = generateTrackingId();
       if (session.payment_status === "paid") {
         const id = session.metadata.orderId;
         const query = { _id: new ObjectId(id) };
         const updateDoc = {
           $set: {
             paymentStatus: "paid",
+            deliveryStatus: "awaiting_pickup",
+            trackingId: trackingId,
           },
         };
         const result = await orderCollection.updateOne(query, updateDoc);
 
         const payment = {
+          sessionId: session.id,
           amount: session.amount_total / 100,
           currency: session.currency,
           customerEmail: session.customer_email,
@@ -345,14 +403,20 @@ async function run() {
           bookName: session.metadata.bookName,
           transactionId: session.payment_intent,
           paymentStatus: session.payment_status,
-          paidAt : new Date(),
+          paidAt: new Date(),
+          trackingId,
         };
 
         const paymentResult = await paymentCollection.insertOne(payment);
 
-        return res.send({modifiedResult: result, paymentInfo: paymentResult});
+        return res.send({
+          modifiedResult: result,
+          trackingId: trackingId,
+          transactionId: session.payment_intent,
+          paymentInfo: paymentResult,
+        });
       }
-      res.send({ success: false});
+      res.send({ success: false });
     });
 
     // admin related api (control api)
