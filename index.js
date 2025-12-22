@@ -128,6 +128,31 @@ async function run() {
       res.send(result);
     });
 
+    // user self order cancel
+
+    app.patch("/user/order-cancel/:id", verifyFBToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          deliveryStatus: "cancelled (yourself)",
+        },
+      };
+      const orderCancel = await orderCollection.updateOne(query, updateDoc);
+      res.send(orderCancel);
+    });
+
+    // user deleted order
+
+    app.patch("/user/order-deleted/:id", verifyFBToken, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const deletedOrder = await orderCollection.updateOne(query, {
+        $set: { userOrderStatus: "deleted" },
+      });
+      res.send(deletedOrder);
+    });
+
     // librarian related api
 
     app.get("/librarians", verifyFBToken, async (req, res) => {
@@ -214,6 +239,20 @@ async function run() {
       }
     );
 
+    app.patch(
+      "/librarians/user-order-remove/:id",
+      verifyFBToken,
+      verifyLibrarian,
+      async (req, res) => {
+        const id = req.params.id;
+        const remove = await orderCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { librarianOrderStatus: "deleted" } }
+        );
+        res.send(remove);
+      }
+    );
+
     // addBook related api
 
     app.get("/add-book", async (req, res) => {
@@ -290,6 +329,9 @@ async function run() {
           librarianEmail: book?.librarianEmail,
           price: book?.price,
           createdAt: new Date(),
+          deliveryStatus: "pending",
+          userOrderStatus: "",
+          librarianOrderStatus: "",
         };
         const orderResult = await orderCollection.insertOne(order);
         return res.send(orderResult);
@@ -448,7 +490,7 @@ async function run() {
         if (bookStatus === "unpublished") {
           const updateDoc1 = {
             $set: {
-              deliveryStatus: "cancelled(refund)",
+              deliveryStatus: "cancelled (refund)",
             },
           };
           const orderResult = await orderCollection.updateMany(
@@ -471,10 +513,13 @@ async function run() {
         const deleteBook = await addBookCollection.deleteOne(query);
         const updateDoc = {
           $set: {
-            deliveryStatus: "cancelled(refund)",
+            deliveryStatus: "cancelled (refund)",
           },
         };
-        const cancelOrders = await orderCollection.updateMany({ bookId: id }, updateDoc);
+        const cancelOrders = await orderCollection.updateMany(
+          { bookId: id },
+          updateDoc
+        );
         res.send({ deleteBook: deleteBook, cancelOrders: cancelOrders });
       }
     );
