@@ -554,7 +554,7 @@ async function run() {
 
     // librarian dashboard
 
-     app.get("/librarian/order/state", async (req, res) => {
+    app.get("/librarian/order/state", async (req, res) => {
       const pipeline = [
         {
           $group: {
@@ -582,6 +582,58 @@ async function run() {
           },
         },
       ];
+      const result = await orderCollection.aggregate(pipeline).toArray();
+      res.send(result);
+    });
+
+    // admin dashboard
+
+    app.get("/admin/order/state", async (req, res) => {
+      const pipeline = [
+        {
+          $group: {
+            _id: "$deliveryStatus",
+            count: { $sum: 1 },
+          },
+        },
+      ];
+      const result = await orderCollection.aggregate(pipeline).toArray();
+      res.send(result);
+    });
+
+    // user dashboard
+
+    app.get("/user/order/state", async (req, res) => {
+      const { userEmail } = req.query; // or req.query if GET
+
+      const pipeline = [
+        {
+          $match: { userEmail: userEmail }, // filter for this specific user
+        },
+        {
+          $group: {
+            _id: "$userOrderStatus",
+            count: { $sum: 1 },
+          },
+        },
+        {
+          $addFields: {
+            label: {
+              $switch: {
+                branches: [
+                  {
+                    case: { $eq: ["$_id", "deleted"] },
+                    then: "User Cancel Orders",
+                  },
+                  { case: { $eq: ["$_id", ""] }, then: "Active Orders" },
+                ],
+                default: "Other Orders",
+              },
+            },
+          },
+        },
+      ];
+
       const result = await orderCollection.aggregate(pipeline).toArray();
       res.send(result);
     });
