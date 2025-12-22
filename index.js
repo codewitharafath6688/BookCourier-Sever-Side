@@ -3,6 +3,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 const cors = require("cors");
 require("dotenv").config();
+const bcrypt = require("bcrypt");
 const stripe = require("stripe")(process.env.STRIPE_Key);
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const admin = require("firebase-admin");
@@ -636,6 +637,27 @@ async function run() {
 
       const result = await orderCollection.aggregate(pipeline).toArray();
       res.send(result);
+    });
+
+    // edit profile
+
+    app.patch("/user/profile", async (req, res) => {
+      const { email, displayName, password } = req.body;
+      const updateFields = {};
+
+      if (displayName) updateFields.displayName = displayName;
+
+
+      const result = await userCollection.updateOne(
+        { email },
+        { $set: updateFields } // update only provided fields
+      );
+
+      if (result.matchedCount === 0) {
+        return res.send({ message: "User not found" });
+      }
+
+      res.send({ message: "Profile updated successfully" });
     });
 
     // Send a ping to confirm a successful connection
