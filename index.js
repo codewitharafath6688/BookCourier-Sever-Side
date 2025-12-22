@@ -445,7 +445,37 @@ async function run() {
           },
         };
         const result = await addBookCollection.updateOne(query, updateDoc);
+        if (bookStatus === "unpublished") {
+          const updateDoc1 = {
+            $set: {
+              deliveryStatus: "cancelled(refund)",
+            },
+          };
+          const orderResult = await orderCollection.updateMany(
+            { bookId: id },
+            updateDoc1
+          );
+          return res.send(orderResult);
+        }
         res.send(result);
+      }
+    );
+
+    app.delete(
+      "/admin/librarian-book/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const deleteBook = await addBookCollection.deleteOne(query);
+        const updateDoc = {
+          $set: {
+            deliveryStatus: "cancelled(refund)",
+          },
+        };
+        const cancelOrders = await orderCollection.updateMany({ bookId: id }, updateDoc);
+        res.send({ deleteBook: deleteBook, cancelOrders: cancelOrders });
       }
     );
 
