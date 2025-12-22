@@ -364,6 +364,19 @@ async function run() {
       res.send(result);
     });
 
+    // payment history deleted
+
+    app.delete(
+      "/payment-history/delete/:id",
+      verifyFBToken,
+      async (req, res) => {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const deletedPayment = await paymentCollection.deleteOne(query);
+        res.send(deletedPayment);
+      }
+    );
+
     // payment related api
 
     app.get("/payment/:id", verifyFBToken, async (req, res) => {
@@ -523,6 +536,55 @@ async function run() {
         res.send({ deleteBook: deleteBook, cancelOrders: cancelOrders });
       }
     );
+
+    // admin deleted user
+
+    app.delete(
+      "/admin/user-delete/:id",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const userDeleted = await userCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(userDeleted);
+      }
+    );
+
+    // librarian dashboard
+
+     app.get("/librarian/order/state", async (req, res) => {
+      const pipeline = [
+        {
+          $group: {
+            _id: "$librarianOrderStatus",
+            count: { $sum: 1 },
+          },
+        },
+        {
+          $addFields: {
+            label: {
+              $switch: {
+                branches: [
+                  {
+                    case: { $eq: ["$_id", "deleted"] },
+                    then: "Librarian Cancel Orders",
+                  },
+                  {
+                    case: { $eq: ["$_id", ""] },
+                    then: "Active Orders",
+                  },
+                ],
+                default: "Other Orders",
+              },
+            },
+          },
+        },
+      ];
+      const result = await orderCollection.aggregate(pipeline).toArray();
+      res.send(result);
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
