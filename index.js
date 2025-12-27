@@ -3,13 +3,12 @@ const app = express();
 const port = process.env.PORT || 3000;
 const cors = require("cors");
 require("dotenv").config();
-const bcrypt = require("bcrypt");
 const stripe = require("stripe")(process.env.STRIPE_Key);
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const admin = require("firebase-admin");
 
-const serviceAccount = require("./bookcourier-auth-firebase-adminsdk.json");
-
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+const serviceAccount = JSON.parse(decoded);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
@@ -59,7 +58,7 @@ app.get("/", (req, res) => {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
     const db = client.db("bookCourier_db");
     const userCollection = db.collection("users");
     const librarianCollection = db.collection("librarians");
@@ -171,6 +170,7 @@ async function run() {
       const query = {
         librarianEmail,
         paymentStatus: "paid",
+        librarianOrderStatus: { $ne: "deleted" },
       };
       const orders = await orderCollection.find(query).toArray();
       res.send(orders);
@@ -246,11 +246,38 @@ async function run() {
       verifyLibrarian,
       async (req, res) => {
         const id = req.params.id;
-        const remove = await orderCollection.updateOne(
+
+        const order = await orderCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!order) {
+          return res.status(404).send({ message: "Order not found" });
+        }
+
+        if (order.deliveryStatus === "delivered") {
+          const result = await orderCollection.updateOne(
+            { _id: new ObjectId(id) },
+            {
+              $set: {
+                librarianOrderStatus: "deleted",
+              },
+            }
+          );
+          return res.send(result);
+        }
+
+        const result = await orderCollection.updateOne(
           { _id: new ObjectId(id) },
-          { $set: { librarianOrderStatus: "deleted" } }
+          {
+            $set: {
+              librarianOrderStatus: "deleted",
+              deliveryStatus: "unavailable (refund)",
+            },
+          }
         );
-        res.send(remove);
+
+        res.send(result);
       }
     );
 
@@ -292,15 +319,22 @@ async function run() {
 
     // books show (for users)
 
-    app.get("/books", verifyFBToken, async (req, res) => {
+    app.get("/books", async (req, res) => {
+      const { sort = "price", order = "desc", search } = req.query;
+      const sortOption = {};
+      sortOption[sort || "price"] = order === "asc" ? 1 : -1;
       const bookStatus = "published";
       const bookQuery = { bookStatus };
+      if (search) {
+        bookQuery.bookName = { $regex: search, $options: "i" };
+      }
+      console.log(sortOption, bookQuery);
       const books = addBookCollection.find(bookQuery);
-      const result = await books.toArray();
+      const result = await books.sort(sortOption).toArray();
       res.send(result);
     });
 
-    app.get("/books/:id", verifyFBToken, async (req, res) => {
+    app.get("/books/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const books = await addBookCollection.findOne(query);
@@ -500,20 +534,28 @@ async function run() {
             bookStatus: bookStatus,
           },
         };
-        const result = await addBookCollection.updateOne(query, updateDoc);
+        const bookResult = await addBookCollection.updateOne(query, updateDoc);
         if (bookStatus === "unpublished") {
-          const updateDoc1 = {
-            $set: {
-              deliveryStatus: "cancelled (refund)",
-            },
-          };
           const orderResult = await orderCollection.updateMany(
-            { bookId: id },
-            updateDoc1
+            {
+              bookId: id,
+              deliveryStatus: {
+                $nin: ["cancelled (yourself)", "delivered"], // 🔥 KEY LINE
+              },
+            },
+            {
+              $set: {
+                deliveryStatus: "cancelled (refund)",
+              },
+            }
           );
-          return res.send(orderResult);
+
+          return res.send({
+            bookResult,
+            orderResult,
+          });
         }
-        res.send(result);
+        res.send(bookResult);
       }
     );
 
@@ -531,7 +573,12 @@ async function run() {
           },
         };
         const cancelOrders = await orderCollection.updateMany(
-          { bookId: id },
+          {
+            bookId: id,
+            deliveryStatus: {
+              $nin: ["cancelled (yourself)", "delivered"], // 🔥 KEY LINE
+            },
+          },
           updateDoc
         );
         res.send({ deleteBook: deleteBook, cancelOrders: cancelOrders });
@@ -555,56 +602,88 @@ async function run() {
 
     // librarian dashboard
 
-    app.get("/librarian/order/state", async (req, res) => {
-      const pipeline = [
-        {
-          $group: {
-            _id: "$librarianOrderStatus",
-            count: { $sum: 1 },
+    app.get(
+      "/librarian/order/state",
+      // verifyFBToken,
+      // verifyLibrarian,
+      async (req, res) => {
+        const orderPipeline = [
+          {
+            $group: {
+              _id: "$librarianOrderStatus",
+              count: { $sum: 1 },
+            },
           },
-        },
-        {
-          $addFields: {
-            label: {
-              $switch: {
-                branches: [
-                  {
-                    case: { $eq: ["$_id", "deleted"] },
-                    then: "Librarian Cancel Orders",
-                  },
-                  {
-                    case: { $eq: ["$_id", ""] },
-                    then: "Active Orders",
-                  },
-                ],
-                default: "Other Orders",
+          {
+            $addFields: {
+              label: {
+                $switch: {
+                  branches: [
+                    {
+                      case: { $eq: ["$_id", "deleted"] },
+                      then: "Librarian Cancel Orders",
+                    },
+                  ],
+                  default: "Other Orders",
+                },
               },
             },
           },
-        },
-      ];
-      const result = await orderCollection.aggregate(pipeline).toArray();
-      res.send(result);
-    });
+        ];
+        const bookPipeline = [
+          {
+            $group: {
+              _id: "$bookStatus",
+              count: { $sum: 1 },
+            },
+          },
+          {
+            $project: {
+              _id: 0,
+              label: {
+                $cond: [
+                  { $eq: ["$_id", "published"] },
+                  "Published Books",
+                  "Unpublished Books",
+                ],
+              },
+              count: 1,
+            },
+          },
+        ];
+        const orderStat = await orderCollection
+          .aggregate(orderPipeline)
+          .toArray();
+        const bookStat = await addBookCollection
+          .aggregate(bookPipeline)
+          .toArray();
+        res.send({ orderStat, bookStat });
+      }
+    );
 
     // admin dashboard
 
-    app.get("/admin/order/state", async (req, res) => {
-      const pipeline = [
-        {
-          $group: {
-            _id: "$deliveryStatus",
-            count: { $sum: 1 },
+    app.get(
+      "/admin/order/state",
+      verifyFBToken,
+      verifyAdmin,
+      async (req, res) => {
+        const pipeline = [
+          {
+            $group: {
+              _id: "$deliveryStatus",
+              count: { $sum: 1 },
+            },
           },
-        },
-      ];
-      const result = await orderCollection.aggregate(pipeline).toArray();
-      res.send(result);
-    });
+        ];
+        const result = await orderCollection.aggregate(pipeline).toArray();
+        res.send(result);
+      }
+    );
 
     // user dashboard
 
-    app.get("/user/order/state", async (req, res) => {
+    app.get("/user/order/state", verifyFBToken, async (req, res) => {
       const { userEmail } = req.query; // or req.query if GET
 
       const pipeline = [
@@ -641,12 +720,15 @@ async function run() {
 
     // edit profile
 
-    app.patch("/user/profile", async (req, res) => {
-      const { email, displayName, password } = req.body;
+    app.patch("/user/profile", verifyFBToken, async (req, res) => {
+      const { email, displayName, photoURL } = req.body;
+
+      if (!email) return res.status(400).send({ message: "Email required" });
+
       const updateFields = {};
 
       if (displayName) updateFields.displayName = displayName;
-
+      if (photoURL) updateFields.photoURL = photoURL;
 
       const result = await userCollection.updateOne(
         { email },
@@ -661,10 +743,10 @@ async function run() {
     });
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // // Ensures that the client will close when you finish/error
     // await client.close();
